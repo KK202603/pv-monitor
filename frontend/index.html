@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="description" content="PV Monitor – Echtzeit-Überwachung deiner Photovoltaik-Anlagen">
+  <title>☀️ PV Monitor</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
+  <script>
+    // Tailwind Dark-Mode-Konfiguration
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto',
+                   'Helvetica Neue', 'Arial', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              yellow: '#eab308',
+              green:  '#22c55e',
+              dark:   '#0f172a',
+            }
+          },
+          animation: {
+            'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Fortschrittsbalken-Animation */
+    @keyframes progress-grow {
+      from { width: 0%; }
+      to   { width: var(--progress); }
+    }
+    .progress-bar {
+      animation: progress-grow 1.2s ease-out forwards;
+      width: var(--progress);
+    }
+    /* Scrollbar dezent gestalten */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    /* Statusindikator-Puls */
+    @keyframes live-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(1.3); }
+    }
+    .live-dot { animation: live-pulse 1.5s ease-in-out infinite; }
+    /* Chart-Container Höhe */
+    .chart-container { position: relative; height: 220px; }
+
+    /* Einstellungs-Formular Inputs */
+    .settings-input {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+      border-radius: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      width: 100%;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .settings-input:focus {
+      border-color: #eab308;
+    }
+    .settings-input option {
+      background: #1e293b;
+    }
+
+    /* Benachrichtigungs-Banner (Ein/Ausblend-Animation) */
+    @keyframes fade-out {
+      0%   { opacity: 1; }
+      70%  { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    .notify-fade {
+      animation: fade-out 3s ease forwards;
+    }
+  </style>
+</head>
+
+<body class="dark bg-slate-900 text-slate-100 min-h-screen font-sans">
+
+  <!-- ═══════════════════════════════════════════════════════ HEADER -->
+  <header class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur border-b border-slate-800">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+      <h1 class="text-xl font-bold tracking-tight">☀️ PV Monitor</h1>
+      <div class="flex items-center gap-3">
+        <!-- LIVE-Indikator (nur im Dashboard sichtbar) -->
+        <div id="live-indicator" class="flex items-center gap-1.5">
+          <span id="live-dot" class="live-dot w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block"></span>
+          <span class="text-xs font-semibold text-emerald-400 tracking-wider">LIVE</span>
+        </div>
+        <!-- Letztes Update -->
+        <span id="last-update" class="text-xs text-slate-400">–</span>
+      </div>
+    </div>
+
+    <!-- Tab-Navigation -->
+    <div class="max-w-5xl mx-auto px-4 flex gap-1 pb-0">
+      <button
+        id="tab-dashboard"
+        onclick="switchTab('dashboard')"
+        class="tab-btn px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors border-yellow-500 text-yellow-400"
+      >
+        📊 Dashboard
+      </button>
+      <button
+        id="tab-settings"
+        onclick="switchTab('settings')"
+        class="tab-btn px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors border-transparent text-slate-400 hover:text-slate-200"
+      >
+        ⚙️ Einstellungen
+      </button>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════ FEHLER-BANNER -->
+  <div id="error-banner" class="hidden max-w-5xl mx-auto px-4 pt-4">
+    <div class="flex items-center gap-2 bg-yellow-900/50 border border-yellow-700 rounded-xl px-4 py-3 text-yellow-300 text-sm">
+      <svg class="w-5 h-5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+        <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+      </svg>
+      <span>⚠️ Verbindung unterbrochen – Daten werden nicht aktualisiert</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ DASHBOARD -->
+  <main id="page-dashboard" class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+
+    <!-- Geräte-Status-Karten -->
+    <section>
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Aktuelle Leistung</h2>
+      <div id="status-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <!-- Wird per JS befüllt -->
+        <div class="animate-pulse bg-slate-800 rounded-2xl h-40"></div>
+        <div class="animate-pulse bg-slate-800 rounded-2xl h-40"></div>
+      </div>
+    </section>
+
+    <!-- Gesamt heute -->
+    <section id="gesamt-section" class="bg-slate-800/60 border border-slate-700 rounded-2xl px-5 py-4 hidden">
+      <div class="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <p class="text-sm text-slate-400">Gesamt heute (beide Anlagen)</p>
+          <p class="text-3xl font-bold text-yellow-400 mt-0.5">
+            <span id="gesamt-kwh">–</span>
+            <span class="text-lg font-medium text-slate-400 ml-1">kWh</span>
+          </p>
+        </div>
+        <div class="text-right">
+          <p class="text-sm text-slate-400">Ersparnis heute</p>
+          <p class="text-2xl font-bold text-emerald-400 mt-0.5">
+            <span id="gesamt-eur">–</span>
+            <span class="text-base font-medium text-slate-400 ml-1">€</span>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 24h Liniendiagramm -->
+    <section class="bg-slate-800/60 border border-slate-700 rounded-2xl p-5">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Leistung – letzte 24 Stunden</h2>
+      <div class="chart-container">
+        <canvas id="chart-24h"></canvas>
+      </div>
+    </section>
+
+    <!-- 30 Tage Balkendiagramm -->
+    <section class="bg-slate-800/60 border border-slate-700 rounded-2xl p-5">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Energie – letzte 30 Tage</h2>
+      <div class="chart-container">
+        <canvas id="chart-30days"></canvas>
+      </div>
+    </section>
+
+    <!-- Amortisation -->
+    <section>
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Amortisation</h2>
+      <div id="amortisation-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="animate-pulse bg-slate-800 rounded-2xl h-48"></div>
+        <div class="animate-pulse bg-slate-800 rounded-2xl h-48"></div>
+      </div>
+    </section>
+
+    <!-- Erwartete Jahresproduktion -->
+    <section>
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Erwartete Jahresproduktion</h2>
+      <div id="projection-cards" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="animate-pulse bg-slate-800 rounded-2xl h-28"></div>
+        <div class="animate-pulse bg-slate-800 rounded-2xl h-28"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ═══════════════════════════════════════════════════════ EINSTELLUNGEN -->
+  <main id="page-settings" class="hidden max-w-5xl mx-auto px-4 py-6 space-y-6">
+
+    <!-- Benachrichtigungs-Banner -->
+    <div id="settings-notify" class="hidden">
+      <div id="settings-notify-inner" class="rounded-xl px-4 py-3 text-sm font-medium"></div>
+    </div>
+
+    <!-- Sektion: Strompreise -->
+    <section class="bg-slate-800/60 border border-slate-700 rounded-2xl p-5">
+      <h2 class="text-base font-semibold text-slate-200 mb-4">⚡ Strompreise</h2>
+
+      <!-- Neuer Preis -->
+      <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Neuer Preis</p>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Preis (Cent/kWh)</label>
+          <input
+            id="input-sp-preis"
+            type="number"
+            step="0.01"
+            min="0"
+            max="500"
+            placeholder="z.B. 28.50"
+            class="settings-input"
+          >
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Gültig ab</label>
+          <input
+            id="input-sp-ab"
+            type="date"
+            class="settings-input"
+          >
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Gültig bis</label>
+          <input
+            id="input-sp-bis"
+            type="date"
+            placeholder="leer = aktuell gültig"
+            class="settings-input"
+          >
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Beschreibung (optional)</label>
+          <input
+            id="input-sp-beschreibung"
+            type="text"
+            placeholder="z.B. Sommertarif 2025"
+            class="settings-input"
+          >
+        </div>
+      </div>
+      <div class="mt-4 flex justify-end">
+        <button
+          onclick="addStrompreis()"
+          class="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white text-sm font-semibold rounded-lg transition-colors"
+        >
+          Hinzufügen
+        </button>
+      </div>
+
+      <!-- Preisverlauf -->
+      <div class="mt-5 border-t border-slate-700/60 pt-4">
+        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Preisverlauf</p>
+        <div id="strompreise-list">
+          <p class="text-slate-500 text-sm">Lade…</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sektion: Investition hinzufügen -->
+    <section class="bg-slate-800/60 border border-slate-700 rounded-2xl p-5">
+      <h2 class="text-base font-semibold text-slate-200 mb-4">💰 Investition hinzufügen</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Anlage</label>
+          <select id="input-device" class="settings-input">
+            <option value="">Gerät laden…</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Betrag (EUR)</label>
+          <input
+            id="input-betrag"
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="z.B. 399.00"
+            class="settings-input"
+          >
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Datum</label>
+          <input
+            id="input-datum"
+            type="date"
+            class="settings-input"
+          >
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Beschreibung (optional)</label>
+          <input
+            id="input-beschreibung"
+            type="text"
+            placeholder="z.B. Balkon-PV Set inkl. Halterung"
+            class="settings-input"
+          >
+        </div>
+      </div>
+      <div class="mt-4 flex justify-end">
+        <button
+          onclick="addInvestment()"
+          class="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-semibold rounded-lg transition-colors"
+        >
+          Hinzufügen
+        </button>
+      </div>
+    </section>
+
+    <!-- Sektion: Bestehende Investitionen -->
+    <section class="bg-slate-800/60 border border-slate-700 rounded-2xl p-5">
+      <h2 class="text-base font-semibold text-slate-200 mb-4">📋 Bestehende Investitionen</h2>
+      <div id="investments-list">
+        <!-- Wird per JS befüllt -->
+        <p class="text-slate-500 text-sm">Keine Investitionen erfasst.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="text-center py-6 text-xs text-slate-600">
+    PV Monitor · Daten werden alle 30 Sekunden aktualisiert
+  </footer>
+
+  <!-- ═══════════════════════════════════════════════════════ JAVASCRIPT -->
+  <script>
+    'use strict';
+
+    // ─────────────────────────────────────── Globale Chart-Instanzen
+    let chart24h    = null;
+    let chart30days = null;
+
+    // ─────────────────────────────────────── Tab-Steuerung
+
+    /** Wechselt zwischen Dashboard und Einstellungen. */
+    function switchTab(tab) {
+      const isDashboard = (tab === 'dashboard');
+
+      // Seiten ein-/ausblenden
+      document.getElementById('page-dashboard').classList.toggle('hidden', !isDashboard);
+      document.getElementById('page-settings').classList.toggle('hidden', isDashboard);
+
+      // LIVE-Indikator und Update-Zeit nur im Dashboard anzeigen
+      document.getElementById('live-indicator').classList.toggle('hidden', !isDashboard);
+      document.getElementById('last-update').classList.toggle('hidden', !isDashboard);
+
+      // Tab-Buttons stylen
+      document.getElementById('tab-dashboard').className =
+        'tab-btn px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors ' +
+        (isDashboard ? 'border-yellow-500 text-yellow-400' : 'border-transparent text-slate-400 hover:text-slate-200');
+      document.getElementById('tab-settings').className =
+        'tab-btn px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors ' +
+        (!isDashboard ? 'border-yellow-500 text-yellow-400' : 'border-transparent text-slate-400 hover:text-slate-200');
+
+      // Einstellungen beim ersten Öffnen laden
+      if (!isDashboard) {
+        loadStrompreise();
+        loadDevices();
+        loadInvestments();
+      }
+    }
+
+    // ─────────────────────────────────────── Hilfsfunktionen
+
+    /** Formatiert eine Zahl mit maximal n Nachkommastellen. */
+    function fmt(n, decimals = 2) {
+      if (n == null || isNaN(n)) return '–';
+      return Number(n).toLocaleString('de-DE', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: decimals
+      });
+    }
+
+    /** Formatiert Watt als "123 W" oder "1,23 kW". */
+    function fmtWatt(w) {
+      if (w == null) return '–';
+      if (Math.abs(w) >= 1000) return fmt(w / 1000, 2) + ' kW';
+      return fmt(w, 0) + ' W';
+    }
+
+    /** Gibt den aktuellen Zeitstempel als lesbaren String zurück. */
+    function nowLabel() {
+      return new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    /** Einfaches HTML-Escaping gegen XSS. */
+    function escHtml(str) {
+      if (str == null) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    /**
+     * Zeigt eine kurze Benachrichtigung auf der Einstellungsseite.
+     * @param {string} msg  - Nachrichtentext
+     * @param {boolean} ok  - true = Erfolg (grün), false = Fehler (rot)
+     */
+    function showNotify(msg, ok) {
+      const wrap  = document.getElementById('settings-notify');
+      const inner = document.getElementById('settings-notify-inner');
+      inner.textContent = ok ? '✓ ' + msg : '✕ ' + msg;
+      inner.className = 'rounded-xl px-4 py-3 text-sm font-medium ' +
+        (ok ? 'bg-emerald-900/60 border border-emerald-700 text-emerald-300'
+            : 'bg-red-900/60 border border-red-700 text-red-300');
+      wrap.classList.remove('hidden');
+      wrap.querySelector('div').classList.remove('notify-fade');
+      // Neustart der Animation durch DOM-Reflow
+      void inner.offsetWidth;
+      inner.classList.add('notify-fade');
+      // Nach 3,2 Sekunden ausblenden
+      setTimeout(() => wrap.classList.add('hidden'), 3200);
+    }
+
+    // ─────────────────────────────────────── Dashboard-Karten
+
+    /** Erstellt eine Status-Karte für ein Gerät. */
+    function buildStatusCard(dev) {
+      const onlineCls = dev.online
+        ? 'bg-emerald-900/60 text-emerald-400 border-emerald-800'
+        : 'bg-red-900/60 text-red-400 border-red-800';
+      const onlineTxt = dev.online ? '● Online' : '○ Offline';
+      const wattColor = dev.online ? 'text-yellow-400' : 'text-slate-500';
+
+      return `
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-5 flex flex-col gap-3">
+          <div class="flex items-center justify-between">
+            <h3 class="font-semibold text-slate-200 truncate">${escHtml(dev.name)}</h3>
+            <span class="text-xs font-medium px-2.5 py-1 rounded-full border ${onlineCls}">${onlineTxt}</span>
+          </div>
+          <div>
+            <p class="text-4xl font-bold ${wattColor} tabular-nums">${fmtWatt(dev.power_w)}</p>
+            <p class="text-xs text-slate-500 mt-1">Aktuelle Leistung</p>
+          </div>
+          <div class="flex gap-4 pt-1 border-t border-slate-700/50">
+            <div>
+              <p class="text-lg font-semibold text-slate-200 tabular-nums">${fmt(dev.today_kwh, 3)} <span class="text-sm text-slate-400">kWh</span></p>
+              <p class="text-xs text-slate-500">Heute erzeugt</p>
+            </div>
+            <div>
+              <p class="text-lg font-semibold text-emerald-400 tabular-nums">${fmt(dev.today_eur, 2)} <span class="text-sm text-slate-400">€</span></p>
+              <p class="text-xs text-slate-500">Heute gespart</p>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    /** Erstellt eine Amortisations-Karte für ein Gerät. */
+    function buildAmortCard(item) {
+      const pct      = item.progress_pct || 0;
+      const barColor = pct >= 100 ? 'bg-emerald-500' : 'bg-yellow-500';
+      const breakeven = item.breakeven_date
+        ? `<p class="text-sm text-slate-400">Break-Even: <span class="font-semibold text-slate-200">${escHtml(item.breakeven_date)}</span></p>`
+        : '';
+      const reingewinn = item.reingewinn_eur != null
+        ? `<p class="text-sm text-emerald-400 font-semibold">✓ Reingewinn: ${fmt(item.reingewinn_eur, 2)} €</p>`
+        : '';
+
+      return `
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-5 flex flex-col gap-3">
+          <h3 class="font-semibold text-slate-200 truncate">${escHtml(item.name)}</h3>
+          <div class="flex justify-between text-sm">
+            <div>
+              <p class="text-slate-400">Investition</p>
+              <p class="font-semibold text-slate-200">${fmt(item.kosten, 2)} €</p>
+            </div>
+            <div class="text-right">
+              <p class="text-slate-400">Ersparnis gesamt</p>
+              <p class="font-semibold text-emerald-400">${fmt(item.savings_eur, 2)} €</p>
+            </div>
+          </div>
+          <!-- Fortschrittsbalken -->
+          <div>
+            <div class="flex justify-between text-xs text-slate-400 mb-1">
+              <span>Amortisation</span>
+              <span class="font-semibold">${fmt(pct, 1)} %</span>
+            </div>
+            <div class="w-full bg-slate-700 rounded-full h-3 overflow-hidden">
+              <div class="progress-bar h-3 rounded-full ${barColor}" style="--progress: ${Math.min(100, pct)}%"></div>
+            </div>
+          </div>
+          <div class="text-sm space-y-1">
+            <p class="text-slate-400">In Betrieb seit: <span class="text-slate-300">${escHtml(item.inbetriebnahme)}</span></p>
+            <p class="text-slate-400">Erzeugt gesamt: <span class="text-slate-300">${fmt(item.total_kwh, 1)} kWh</span></p>
+            ${breakeven}
+            ${reingewinn}
+          </div>
+        </div>`;
+    }
+
+    /** Erstellt eine Jahresproduktions-Karte für ein Gerät. */
+    function buildProjectionCard(item) {
+      return `
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-5">
+          <h3 class="font-semibold text-slate-200 truncate mb-3">${escHtml(item.name)}</h3>
+          <div class="flex gap-6">
+            <div>
+              <p class="text-2xl font-bold text-yellow-400 tabular-nums">${fmt(item.projected_kwh_year, 0)}</p>
+              <p class="text-xs text-slate-400 mt-0.5">kWh / Jahr</p>
+            </div>
+            <div>
+              <p class="text-2xl font-bold text-emerald-400 tabular-nums">${fmt(item.projected_eur_year, 0)}</p>
+              <p class="text-xs text-slate-400 mt-0.5">€ / Jahr</p>
+            </div>
+          </div>
+          <p class="text-xs text-slate-600 mt-3">Basis: Ø der letzten 30 Tage × 365</p>
+        </div>`;
+    }
+
+    // ─────────────────────────────────────── Chart-Hilfsfunktionen
+
+    /** Gemeinsame Chart-Standardoptionen (Dark Theme). */
+    function baseChartOptions(tooltipCallback) {
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            display: true,
+            labels: {
+              color: '#94a3b8',
+              font: { size: 12 },
+              boxWidth: 12,
+              padding: 16,
+            }
+          },
+          tooltip: {
+            backgroundColor: '#1e293b',
+            borderColor: '#334155',
+            borderWidth: 1,
+            titleColor: '#e2e8f0',
+            bodyColor: '#94a3b8',
+            padding: 10,
+            callbacks: tooltipCallback || {}
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#64748b', font: { size: 11 }, maxRotation: 0 },
+            grid:  { color: 'rgba(51,65,85,0.5)', drawBorder: false }
+          },
+          y: {
+            ticks: { color: '#64748b', font: { size: 11 } },
+            grid:  { color: 'rgba(51,65,85,0.5)', drawBorder: false },
+            beginAtZero: true,
+          }
+        }
+      };
+    }
+
+    // ─────────────────────────────────────── Dashboard – Daten laden
+
+    /** Lädt den Gerätestatus und aktualisiert die Status-Karten. */
+    async function loadStatus() {
+      const res     = await fetch('/api/status');
+      const data    = await res.json();
+      const devices = data.devices || [];
+
+      // Status-Karten rendern
+      document.getElementById('status-cards').innerHTML =
+        devices.map(buildStatusCard).join('');
+
+      // Gesamtsumme berechnen
+      const totalKwh = devices.reduce((s, d) => s + (d.today_kwh || 0), 0);
+      const totalEur = devices.reduce((s, d) => s + (d.today_eur || 0), 0);
+
+      if (devices.length > 1) {
+        document.getElementById('gesamt-kwh').textContent = fmt(totalKwh, 3);
+        document.getElementById('gesamt-eur').textContent = fmt(totalEur, 2);
+        document.getElementById('gesamt-section').classList.remove('hidden');
+      }
+    }
+
+    /** Lädt und rendert das 24h-Liniendiagramm. */
+    async function loadChart24h() {
+      const res  = await fetch('/api/chart/24h');
+      const data = await res.json();
+
+      const ctx  = document.getElementById('chart-24h').getContext('2d');
+      const opts = baseChartOptions({
+        label: ctx => {
+          const v = ctx.parsed.y;
+          return v != null ? fmtWatt(v) : 'Keine Daten';
+        }
+      });
+      opts.scales.y.title = { display: true, text: 'Leistung (W)', color: '#64748b', font: { size: 11 } };
+
+      const datasets = (data.datasets || []).map(ds => ({
+        label: ds.name,
+        data: ds.data,
+        borderColor: ds.borderColor,
+        backgroundColor: ds.backgroundColor,
+        pointBackgroundColor: ds.pointBackgroundColor,
+        borderWidth: 2,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+        tension: 0.4,
+        fill: true,
+        spanGaps: true,
+      }));
+
+      if (chart24h) {
+        chart24h.data.labels   = data.labels;
+        chart24h.data.datasets = datasets;
+        chart24h.update();
+      } else {
+        chart24h = new Chart(ctx, { type: 'line', data: { labels: data.labels, datasets }, options: opts });
+      }
+    }
+
+    /** Lädt und rendert das 30-Tage-Balkendiagramm. */
+    async function loadChart30days() {
+      const res  = await fetch('/api/chart/30days');
+      const data = await res.json();
+
+      const ctx  = document.getElementById('chart-30days').getContext('2d');
+      const opts = baseChartOptions({
+        label: ctx => {
+          const v = ctx.parsed.y;
+          return v != null ? `${fmt(v, 2)} kWh` : 'Keine Daten';
+        },
+      });
+      opts.scales.x.ticks.maxRotation = 45;
+      opts.scales.y.title = { display: true, text: 'Energie (kWh)', color: '#64748b', font: { size: 11 } };
+      opts.plugins.legend.display = (data.datasets || []).length > 1;
+
+      // Gestapelte Balken
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
+
+      const datasets = (data.datasets || []).map(ds => ({
+        label: ds.name,
+        data: ds.data,
+        backgroundColor: ds.backgroundColor,
+        borderColor: ds.borderColor,
+        borderWidth: ds.borderWidth || 1,
+        borderRadius: 3,
+        spanGaps: false,
+      }));
+
+      if (chart30days) {
+        chart30days.data.labels   = data.labels;
+        chart30days.data.datasets = datasets;
+        chart30days.update();
+      } else {
+        chart30days = new Chart(ctx, { type: 'bar', data: { labels: data.labels, datasets }, options: opts });
+      }
+    }
+
+    /** Lädt und rendert die Amortisations-Karten. */
+    async function loadAmortisation() {
+      const res  = await fetch('/api/amortisation');
+      const data = await res.json();
+      document.getElementById('amortisation-cards').innerHTML =
+        data.map(buildAmortCard).join('');
+    }
+
+    /** Lädt und rendert die Erwartete Jahresproduktion. */
+    async function loadProjection() {
+      const res  = await fetch('/api/projection');
+      const data = await res.json();
+      document.getElementById('projection-cards').innerHTML =
+        data.map(buildProjectionCard).join('');
+    }
+
+    // ─────────────────────────────────────── Einstellungen – Strompreise
+
+    /** Formatiert ein ISO-Datum (YYYY-MM-DD) als DD.MM.YYYY. */
+    function fmtDatum(iso) {
+      if (!iso) return null;
+      const parts = iso.split('-');
+      if (parts.length === 3) return `${parts[2]}.${parts[1]}.${parts[0]}`;
+      return iso;
+    }
+
+    /** Lädt alle Strompreise und rendert die Preisverlauf-Liste. */
+    async function loadStrompreise() {
+      try {
+        const res  = await fetch('/api/strompreise');
+        const data = await res.json();
+        const container = document.getElementById('strompreise-list');
+
+        if (!data.length) {
+          container.innerHTML = '<p class="text-slate-500 text-sm">Keine Einträge vorhanden.</p>';
+          return;
+        }
+
+        container.innerHTML = data.map(sp => {
+          const ab  = fmtDatum(sp.gueltig_ab) || '–';
+          const bis = sp.gueltig_bis ? fmtDatum(sp.gueltig_bis) : null;
+          const zeitraum = bis
+            ? `${ab}–${bis}`
+            : `ab ${ab}`;
+          const badge = !sp.gueltig_bis
+            ? `<span class="ml-1 px-1.5 py-0.5 text-xs font-semibold bg-emerald-900/60 border border-emerald-700 text-emerald-400 rounded">aktuell</span>`
+            : '';
+          const beschr = sp.beschreibung
+            ? `<span class="text-slate-500 truncate max-w-[120px]" title="${escHtml(sp.beschreibung)}">${escHtml(sp.beschreibung)}</span>`
+            : '';
+
+          return `
+            <div class="flex items-center justify-between gap-2 py-2.5 border-b border-slate-700/50 last:border-0">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm min-w-0">
+                <span class="font-semibold text-yellow-400 tabular-nums">${fmt(sp.preis_cent, 2)} ct</span>
+                <span class="text-slate-400">${escHtml(zeitraum)}</span>
+                ${badge}
+                ${beschr}
+              </div>
+              <button
+                onclick="deleteStrompreis(${sp.id})"
+                class="shrink-0 px-2.5 py-1 bg-red-900/60 hover:bg-red-700/80 text-red-400 hover:text-red-200 text-xs font-semibold rounded-lg border border-red-800 transition-colors"
+                title="Eintrag löschen"
+              >🗑</button>
+            </div>`;
+        }).join('');
+      } catch (err) {
+        console.warn('[PV Monitor] Strompreise konnten nicht geladen werden:', err);
+      }
+    }
+
+    /** Fügt einen neuen Strompreis hinzu. */
+    async function addStrompreis() {
+      const preis       = parseFloat(document.getElementById('input-sp-preis').value);
+      const gueltig_ab  = document.getElementById('input-sp-ab').value;
+      const gueltig_bis = document.getElementById('input-sp-bis').value || null;
+      const beschreibung = document.getElementById('input-sp-beschreibung').value.trim();
+
+      if (isNaN(preis) || preis <= 0) {
+        showNotify('Bitte einen gültigen Preis eingeben.', false);
+        return;
+      }
+      if (!gueltig_ab) {
+        showNotify('Bitte das Startdatum eingeben.', false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/strompreise', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preis_cent: preis, gueltig_ab, gueltig_bis, beschreibung }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+
+        // Formular zurücksetzen
+        document.getElementById('input-sp-preis').value = '';
+        document.getElementById('input-sp-ab').value = '';
+        document.getElementById('input-sp-bis').value = '';
+        document.getElementById('input-sp-beschreibung').value = '';
+
+        showNotify('Strompreis erfolgreich gespeichert.', true);
+        await loadStrompreise();
+      } catch (err) {
+        showNotify('Fehler beim Speichern: ' + err.message, false);
+      }
+    }
+
+    /** Löscht einen Strompreis-Eintrag nach Bestätigung. */
+    async function deleteStrompreis(id) {
+      if (!confirm('Strompreis-Eintrag wirklich löschen?')) return;
+      try {
+        const res = await fetch(`/api/strompreise/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(await res.text());
+        showNotify('Eintrag gelöscht.', true);
+        await loadStrompreise();
+      } catch (err) {
+        showNotify('Fehler beim Löschen: ' + err.message, false);
+      }
+    }
+    /** Befüllt das Geräte-Dropdown aus /api/status. */
+    async function loadDevices() {
+      try {
+        const res     = await fetch('/api/status');
+        const data    = await res.json();
+        const devices = data.devices || [];
+        const select  = document.getElementById('input-device');
+        select.innerHTML = devices.map(d =>
+          `<option value="${escHtml(String(d.id))}">${escHtml(d.name)}</option>`
+        ).join('');
+      } catch (err) {
+        console.warn('[PV Monitor] Geräteliste konnte nicht geladen werden:', err);
+      }
+    }
+
+    /** Lädt alle Investitionen und rendert die Liste. */
+    async function loadInvestments() {
+      try {
+        const res  = await fetch('/api/investments');
+        const data = await res.json();
+        const container = document.getElementById('investments-list');
+
+        if (!data.length) {
+          container.innerHTML = '<p class="text-slate-500 text-sm">Keine Investitionen erfasst.</p>';
+          return;
+        }
+
+        container.innerHTML = data.map(inv => {
+          // Datum ins Deutsche Format umwandeln (YYYY-MM-DD → DD.MM.YYYY)
+          let datumAnzeige = inv.datum;
+          try {
+            const parts = inv.datum.split('-');
+            if (parts.length === 3) datumAnzeige = `${parts[2]}.${parts[1]}.${parts[0]}`;
+          } catch (_) {}
+
+          const beschr = inv.beschreibung
+            ? `<span class="text-slate-500 truncate max-w-[120px]" title="${escHtml(inv.beschreibung)}">${escHtml(inv.beschreibung)}</span>`
+            : '';
+
+          return `
+            <div class="flex items-center justify-between gap-2 py-2.5 border-b border-slate-700/50 last:border-0">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm min-w-0">
+                <span class="font-medium text-slate-200">${escHtml(inv.device_name)}</span>
+                <span class="text-yellow-400 font-semibold tabular-nums">${fmt(inv.betrag, 2)} €</span>
+                <span class="text-slate-400">${escHtml(datumAnzeige)}</span>
+                ${beschr}
+              </div>
+              <button
+                onclick="deleteInvestment(${inv.id})"
+                class="shrink-0 px-2.5 py-1 bg-red-900/60 hover:bg-red-700/80 text-red-400 hover:text-red-200 text-xs font-semibold rounded-lg border border-red-800 transition-colors"
+                title="Investition löschen"
+              >🗑</button>
+            </div>`;
+        }).join('');
+      } catch (err) {
+        console.warn('[PV Monitor] Investitionen konnten nicht geladen werden:', err);
+      }
+    }
+
+    /** Fügt eine neue Investition hinzu. */
+    async function addInvestment() {
+      const deviceId    = parseInt(document.getElementById('input-device').value, 10);
+      const betrag      = parseFloat(document.getElementById('input-betrag').value);
+      const datum       = document.getElementById('input-datum').value;
+      const beschreibung = document.getElementById('input-beschreibung').value.trim();
+
+      if (!deviceId) {
+        showNotify('Bitte ein Gerät auswählen.', false);
+        return;
+      }
+      if (isNaN(betrag) || betrag <= 0) {
+        showNotify('Bitte einen gültigen Betrag eingeben.', false);
+        return;
+      }
+      if (!datum) {
+        showNotify('Bitte ein Datum eingeben.', false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/investments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_id: deviceId, betrag, datum, beschreibung }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+
+        // Formular zurücksetzen
+        document.getElementById('input-betrag').value = '';
+        document.getElementById('input-datum').value = '';
+        document.getElementById('input-beschreibung').value = '';
+
+        showNotify('Investition erfolgreich gespeichert.', true);
+        await loadInvestments();
+      } catch (err) {
+        showNotify('Fehler beim Speichern: ' + err.message, false);
+      }
+    }
+
+    /** Löscht eine Investition nach Bestätigung. */
+    async function deleteInvestment(id) {
+      if (!confirm('Investition wirklich löschen?')) return;
+      try {
+        const res = await fetch(`/api/investments/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(await res.text());
+        showNotify('Investition gelöscht.', true);
+        await loadInvestments();
+      } catch (err) {
+        showNotify('Fehler beim Löschen: ' + err.message, false);
+      }
+    }
+
+    // ─────────────────────────────────────── Haupt-Refresh-Loop
+
+    /** Lädt alle Dashboard-Daten und aktualisiert die Oberfläche. */
+    async function refreshAll() {
+      try {
+        await Promise.all([
+          loadStatus(),
+          loadChart24h(),
+          loadChart30days(),
+          loadAmortisation(),
+          loadProjection(),
+        ]);
+        // Fehler-Banner verstecken
+        document.getElementById('error-banner').classList.add('hidden');
+        document.getElementById('live-dot').classList.remove('bg-yellow-400');
+        document.getElementById('live-dot').classList.add('bg-emerald-400');
+        // Letztes Update
+        document.getElementById('last-update').textContent = 'Zuletzt: ' + nowLabel();
+      } catch (err) {
+        console.warn('[PV Monitor] API nicht erreichbar:', err);
+        // Fehler-Banner anzeigen
+        document.getElementById('error-banner').classList.remove('hidden');
+        document.getElementById('live-dot').classList.remove('bg-emerald-400');
+        document.getElementById('live-dot').classList.add('bg-yellow-400');
+      }
+    }
+
+    // ─────────────────────────────────────── Start
+
+    // Heutiges Datum als Standard-Datum im Investitions-Formular setzen
+    document.getElementById('input-datum').value = new Date().toISOString().slice(0, 10);
+
+    // Sofort laden, dann alle 30 Sekunden wiederholen
+    refreshAll();
+    setInterval(refreshAll, 30_000);
+  </script>
+</body>
+</html>
