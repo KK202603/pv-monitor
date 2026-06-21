@@ -90,6 +90,19 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_device_ts ON readings(device_id, ts)
         """)
 
+        # Produktions-Offset-Tabelle (historischer Gesamtertrag aus Shelly-App)
+        # Ermöglicht korrekte Break-Even-Berechnung auch wenn das Monitoring erst kürzlich startete.
+        # Der Offset = kumulativer Ertrag VOR dem ersten Datenbank-Eintrag (aus Shelly-App abgelesen).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS production_offset (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id   INTEGER NOT NULL UNIQUE,
+                offset_kwh  REAL    NOT NULL DEFAULT 0,
+                beschreibung TEXT   DEFAULT '',
+                updated_at  TEXT    NOT NULL DEFAULT (STRFTIME('%Y-%m-%d %H:%M:%S', 'NOW'))
+            )
+        """)
+
         # Investitions-Tabelle
         conn.execute("""
             CREATE TABLE IF NOT EXISTS investments (
@@ -331,12 +344,28 @@ def _last_reading(conn: sqlite3.Connection, device_id: int) -> Optional[sqlite3.
     ).fetchone()
 
 
+def _get_production_offset(conn: sqlite3.Connection, device_id: int) -> float:
+    """Gibt den manuell eingetragenen historischen Produktions-Offset in kWh zurück.
+
+    Dieser Offset entspricht dem kumulativen Gesamtertrag (aus der Shelly-App abgelesen)
+    VOR dem ersten Eintrag in der readings-Tabelle. Kompensiert den fehlenden
+    historischen Datensatz wenn das Monitoring erst nach Inbetriebnahme gestartet wurde.
+    """
+    row = conn.execute(
+        "SELECT offset_kwh FROM production_offset WHERE device_id = ?",
+        (device_id,),
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else 0.0
+
+
 def _total_energy_kwh(conn: sqlite3.Connection, device_id: int) -> float:
     """Berechnet die gesamte erzeugte Energie in kWh über alle Messwerte.
 
-    Verwendet MAX(total_wh) - MIN(total_wh) global — funktioniert korrekt
-    sowohl für historische Jahresstempel als auch für Live-Polling-Daten.
+    Formel: production_offset (historisch, manuell) + (MAX(total_wh) - MIN(total_wh)) aus DB.
+    Der Offset kompensiert Produktionsdaten vor Start des Monitorings (z.B. 4 Jahre vor
+    erstem DB-Eintrag). Ohne Offset zeigt Break-Even absurde Daten (Jahr 3125+).
     """
+    offset_kwh = _get_production_offset(conn, device_id)
     row = conn.execute(
         """
         SELECT MAX(total_wh) - MIN(total_wh)
@@ -347,7 +376,8 @@ def _total_energy_kwh(conn: sqlite3.Connection, device_id: int) -> float:
         (device_id,),
     ).fetchone()
     diff = row[0] if row and row[0] is not None else 0.0
-    return max(0.0, diff) / 60000.0
+    db_kwh = max(0.0, diff) / 60000.0
+    return offset_kwh + db_kwh
 
 
 def _total_savings_eur(conn: sqlite3.Connection, device_id: int) -> float:
@@ -355,6 +385,7 @@ def _total_savings_eur(conn: sqlite3.Connection, device_id: int) -> float:
 
     Für jede Preisperiode wird die in diesem Zeitraum produzierte Energie
     mit dem damals gültigen Preis multipliziert.
+    Der Produktions-Offset (historisch) wird mit dem Strompreis der Inbetriebnahme-Periode bewertet.
     """
     # Alle Strompreisperioden holen
     perioden = conn.execute("""
@@ -366,7 +397,7 @@ def _total_savings_eur(conn: sqlite3.Connection, device_id: int) -> float:
 
     total_eur = 0.0
 
-    for periode in perioden:
+    for i, periode in enumerate(perioden):
         preis_cent = periode[0]
         von = periode[1]
         bis = periode[2]
@@ -383,6 +414,12 @@ def _total_savings_eur(conn: sqlite3.Connection, device_id: int) -> float:
 
         diff_wh = row[0] if row and row[0] is not None else 0.0
         kwh = max(0.0, diff_wh) / 60000.0
+
+        # Produktions-Offset wird in der ersten (ältesten) Periode hinzugerechnet
+        if i == 0:
+            offset_kwh = _get_production_offset(conn, device_id)
+            kwh += offset_kwh
+
         total_eur += kwh * preis_cent / 100.0
 
     return round(total_eur, 2)
@@ -814,3 +851,80 @@ async def delete_investment(investment_id: int) -> dict:
 async def health() -> dict:
     """Gesundheitsprüfung für den Container-Orchestrator."""
     return {"status": "ok", "devices": len(DEVICES)}
+
+
+# ---------------------------------------------------------------------------
+# API Endpoints – Produktions-Offset (historische Gesamtproduktion)
+# ---------------------------------------------------------------------------
+
+class ProductionOffsetBody(BaseModel):
+    """Historischer Produktions-Offset für ein Gerät."""
+    device_id: int
+    offset_kwh: float
+    beschreibung: str = ""
+
+
+@app.get("/api/production-offset")
+async def get_production_offsets() -> list:
+    """Gibt alle gespeicherten Produktions-Offsets zurück.
+
+    Der Offset = kumulativer Gesamtertrag (aus Shelly-App abgelesen) VOR dem
+    ersten DB-Eintrag. Wird zur Break-Even-Berechnung addiert, damit das
+    Monitoring nicht erst ab dem Startdatum der DB zählt.
+    """
+    device_map = {dev["id"]: dev["name"] for dev in DEVICES}
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT device_id, offset_kwh, beschreibung, updated_at FROM production_offset ORDER BY device_id"
+        ).fetchall()
+    result = []
+    for r in rows:
+        result.append({
+            "device_id": r["device_id"],
+            "device_name": device_map.get(r["device_id"], f"Gerät {r['device_id']}"),
+            "offset_kwh": r["offset_kwh"],
+            "beschreibung": r["beschreibung"] or "",
+            "updated_at": r["updated_at"],
+        })
+    return result
+
+
+@app.post("/api/production-offset")
+async def set_production_offset(body: ProductionOffsetBody) -> dict:
+    """Setzt oder aktualisiert den historischen Produktions-Offset für ein Gerät.
+
+    Nutze diesen Endpunkt um den in der Shelly-App angezeigten Gesamtertrag
+    (kWh seit Inbetriebnahme) einzutragen. Das Dashboard addiert diesen Wert
+    zur intern gemessenen DB-Produktion für eine korrekte Break-Even-Berechnung.
+    """
+    valid_ids = {dev["id"] for dev in DEVICES}
+    if body.device_id not in valid_ids:
+        raise HTTPException(status_code=400, detail=f"Unbekannte Geräte-ID: {body.device_id}")
+    if body.offset_kwh < 0:
+        raise HTTPException(status_code=400, detail="Offset muss >= 0 kWh sein.")
+
+    updated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO production_offset (device_id, offset_kwh, beschreibung, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(device_id) DO UPDATE SET
+                   offset_kwh = excluded.offset_kwh,
+                   beschreibung = excluded.beschreibung,
+                   updated_at = excluded.updated_at""",
+            (body.device_id, body.offset_kwh, body.beschreibung, updated_at),
+        )
+        conn.commit()
+
+    device_map = {dev["id"]: dev["name"] for dev in DEVICES}
+    logger.info(
+        "Produktions-Offset gesetzt: Gerät %d (%s) = %.2f kWh",
+        body.device_id, device_map.get(body.device_id, "?"), body.offset_kwh,
+    )
+    return {
+        "device_id": body.device_id,
+        "device_name": device_map.get(body.device_id, f"Gerät {body.device_id}"),
+        "offset_kwh": body.offset_kwh,
+        "beschreibung": body.beschreibung,
+        "updated_at": updated_at,
+    }

@@ -338,6 +338,55 @@
       </div>
     </section>
 
+    <!-- Sektion: Historischer Gesamtertrag (Offset) -->
+    <section class="bg-slate-800/60 border border-amber-700/50 rounded-2xl p-5">
+      <h2 class="text-base font-semibold text-slate-200 mb-1">📊 Historischer Gesamtertrag (Korrektur)</h2>
+      <p class="text-xs text-slate-400 mb-4">
+        Trage hier den in der <strong>Shelly-App</strong> angezeigten Lifetime-Gesamtertrag (kWh) ein.
+        Dieser Wert wird zur DB-Messung addiert — notwendig, weil das Monitoring erst kürzlich startete
+        und die Break-Even-Berechnung sonst falsche Jahreszahlen liefert.
+      </p>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Gerät</label>
+          <select id="input-offset-device" class="settings-input">
+            <!-- Wird per loadDevices() befüllt -->
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Gesamtertrag aus Shelly-App (kWh)</label>
+          <input
+            id="input-offset-kwh"
+            type="number"
+            step="0.1"
+            min="0"
+            placeholder="z.B. 1850.5"
+            class="settings-input"
+          >
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block">Notiz (optional)</label>
+          <input
+            id="input-offset-beschreibung"
+            type="text"
+            placeholder="z.B. abgelesen 21.06.2026"
+            class="settings-input"
+          >
+        </div>
+      </div>
+      <div class="mt-4 flex justify-end">
+        <button
+          onclick="setProductionOffset()"
+          class="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors"
+        >
+          Speichern
+        </button>
+      </div>
+      <div id="offsets-list" class="mt-4">
+        <!-- Wird per JS befüllt -->
+      </div>
+    </section>
+
   </main>
 
   <!-- Footer -->
@@ -380,6 +429,7 @@
         loadStrompreise();
         loadDevices();
         loadInvestments();
+        loadProductionOffsets();
       }
     }
 
@@ -800,9 +850,12 @@
         const data    = await res.json();
         const devices = data.devices || [];
         const select  = document.getElementById('input-device');
-        select.innerHTML = devices.map(d =>
+        const selectOffset = document.getElementById('input-offset-device');
+        const opts = devices.map(d =>
           `<option value="${escHtml(String(d.id))}">${escHtml(d.name)}</option>`
         ).join('');
+        select.innerHTML = opts;
+        selectOffset.innerHTML = opts;
       } catch (err) {
         console.warn('[PV Monitor] Geräteliste konnte nicht geladen werden:', err);
       }
@@ -902,6 +955,68 @@
         await loadInvestments();
       } catch (err) {
         showNotify('Fehler beim Löschen: ' + err.message, false);
+      }
+    }
+
+    // ─────────────────────────────────────── Produktions-Offset
+
+    /** Speichert den historischen Gesamtertrag (aus Shelly-App) als Offset. */
+    async function setProductionOffset() {
+      const deviceId = parseInt(document.getElementById('input-offset-device').value, 10);
+      const offsetKwh = parseFloat(document.getElementById('input-offset-kwh').value);
+      const beschreibung = document.getElementById('input-offset-beschreibung').value.trim();
+
+      if (!deviceId) {
+        showNotify('Bitte ein Gerät auswählen.', false);
+        return;
+      }
+      if (isNaN(offsetKwh) || offsetKwh < 0) {
+        showNotify('Bitte einen gültigen kWh-Wert eingeben (≥ 0).', false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/production-offset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_id: deviceId, offset_kwh: offsetKwh, beschreibung }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+
+        document.getElementById('input-offset-kwh').value = '';
+        document.getElementById('input-offset-beschreibung').value = '';
+
+        showNotify('Historischer Gesamtertrag gespeichert. Break-Even-Berechnung wird aktualisiert.', true);
+        await loadProductionOffsets();
+      } catch (err) {
+        showNotify('Fehler beim Speichern: ' + err.message, false);
+      }
+    }
+
+    /** Lädt und rendert alle gespeicherten Produktions-Offsets. */
+    async function loadProductionOffsets() {
+      try {
+        const res  = await fetch('/api/production-offset');
+        const data = await res.json();
+        const container = document.getElementById('offsets-list');
+
+        if (!data.length) {
+          container.innerHTML = '<p class="text-slate-500 text-sm">Noch kein Offset eingetragen.</p>';
+          return;
+        }
+
+        container.innerHTML = data.map(o => `
+          <div class="flex items-center justify-between py-2 border-t border-slate-700/50">
+            <div>
+              <span class="text-sm text-slate-200 font-medium">${escHtml(o.device_name)}</span>
+              <span class="text-xs text-slate-400 ml-2">${fmt(o.offset_kwh, 1)} kWh historisch</span>
+              ${o.beschreibung ? `<span class="text-xs text-slate-500 ml-2">(${escHtml(o.beschreibung)})</span>` : ''}
+            </div>
+            <span class="text-xs text-slate-500">${o.updated_at}</span>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.warn('[PV Monitor] Produktions-Offsets konnten nicht geladen werden:', err);
       }
     }
 
