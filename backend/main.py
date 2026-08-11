@@ -251,13 +251,21 @@ async def poll_device(session: aiohttp.ClientSession, device: dict[str, Any]) ->
 
 
 async def polling_loop() -> None:
-    """Hauptschleife: Fragt alle konfigurierten Geräte im festgelegten Intervall ab."""
+    """Hauptschleife: Fragt alle konfigurierten Geräte im festgelegten Intervall ab.
+
+    Wichtig: Geräte werden SEQUENZIELL (nicht parallel via asyncio.gather)
+    abgefragt, mit kurzer Pause zwischen den Requests. Shelly Cloud rate-limitet
+    gleichzeitige Requests desselben Auth-Keys (TOO_MANY_REQUESTS) — bei
+    paralleler Abfrage kippte dadurch bei jedem Zyklus abwechselnd eines der
+    Geräte fälschlich auf online=False, obwohl es laut Shelly Cloud online war.
+    """
     logger.info("Polling-Loop gestartet (Intervall: %ds)", POLL_INTERVAL)
     async with aiohttp.ClientSession() as session:
         while True:
-            tasks = [poll_device(session, dev) for dev in DEVICES]
-            if tasks:
-                await asyncio.gather(*tasks)
+            if DEVICES:
+                for dev in DEVICES:
+                    await poll_device(session, dev)
+                    await asyncio.sleep(2)  # Abstand zwischen Requests gegen Rate-Limit
             else:
                 logger.warning("Keine Geräte konfiguriert – Polling übersprungen")
             await asyncio.sleep(POLL_INTERVAL)
