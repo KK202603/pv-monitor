@@ -196,25 +196,31 @@ async def fetch_shelly_cloud(session: aiohttp.ClientSession, auth_key: str, serv
     if not online:
         raise ConnectionError("Gerät offline laut Cloud")
 
-    # Energie aus verschiedenen Shelly-Generationen:
-    # Gen1:      meters[] → power, total
-    # Gen2 EM:   emeters[] → power, total
-    # Gen2 Pro:  switch:0 → apower, aenergy.total  (z.B. Shelly Pro 3EM)
+    # Energie aus verschiedenen Shelly-Generationen. WICHTIG: total_wh wird hier
+    # bereits auf echte Wattstunden (Wh) normalisiert, damit alle Downstream-
+    # Berechnungen (_today_energy_kwh etc.) geräteübergreifend mit /1000.0
+    # rechnen können — unabhängig davon, welche Generation das Gerät ist.
+    #
+    # Gen1 (z.B. Shelly Plug S, "meters"):
+    #   total liefert Watt-Minuten (Wmin), NICHT Wh → / 60 zur Normalisierung
+    #   (1 Wh = 60 Wmin).
+    # Gen2 EM ("emeters") / Gen2 Pro ("switch:0"):
+    #   total / aenergy.total liefern bereits Wh → keine Umrechnung nötig.
     meters = device_status.get("meters", [])
     emeters = device_status.get("emeters", [])
     switch0 = device_status.get("switch:0", {})
 
-    if emeters:  # Gen2 Energie-Meter
+    if emeters:  # Gen2 Energie-Meter — bereits Wh
         power_w = float(emeters[0].get("power", 0))
         total_wh = float(emeters[0].get("total", 0))
-    elif meters:  # Gen1
+    elif meters:  # Gen1 — Watt-Minuten, auf Wh normalisieren
         power_w = float(meters[0].get("power", 0))
-        total_wh = float(meters[0].get("total", 0))
-    elif switch0:  # Shelly Pro (switch:0) — apower negativ = Einspeisung
+        total_wh = float(meters[0].get("total", 0)) / 60.0
+    elif switch0:  # Shelly Pro (switch:0) — bereits Wh, apower negativ = Einspeisung
         power_w = abs(float(switch0.get("apower", 0)))
         total_wh = float(switch0.get("aenergy", {}).get("total", 0))
     else:
-        # Letzter Fallback: apower direkt auf device_status-Ebene
+        # Letzter Fallback: apower direkt auf device_status-Ebene — bereits Wh
         power_w = abs(float(device_status.get("apower", 0)))
         total_wh = float(device_status.get("aenergy", {}).get("total", 0))
 
