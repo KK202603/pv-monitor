@@ -316,14 +316,14 @@ class InvestmentBody(BaseModel):
 def _today_energy_kwh(conn: sqlite3.Connection, device_id: int) -> float:
     """Berechnet die heute erzeugte Energie in kWh für ein Gerät.
 
-    Formel: (MAX(total_wh) - MIN(total_wh)) / 60000 für den aktuellen Tag.
-    Hinweis: Shelly EM Gen1 liefert total in Watt-Minuten (Wmin), nicht Wh.
+    Formel: (MAX(total_wh) - MIN(total_wh)) / 1000 für den aktuellen Tag.
+    Hinweis: Shelly Gen2/Gen3 liefert total in Wh. Gen1 EM liefert Watt-Minuten (dann /60000).
     Berücksichtigt nur Zeilen mit gültigem total_wh (online=1).
     """
     today = date.today().isoformat()
     row = conn.execute(
         """
-        SELECT (MAX(total_wh) - MIN(total_wh)) / 60000.0 AS kwh
+        SELECT (MAX(total_wh) - MIN(total_wh)) / 1000.0 AS kwh
         FROM readings
         WHERE device_id = ?
           AND DATE(ts) = ?
@@ -376,7 +376,7 @@ def _total_energy_kwh(conn: sqlite3.Connection, device_id: int) -> float:
         (device_id,),
     ).fetchone()
     diff = row[0] if row and row[0] is not None else 0.0
-    db_kwh = max(0.0, diff) / 60000.0
+    db_kwh = max(0.0, diff) / 1000.0
     return offset_kwh + db_kwh
 
 
@@ -413,7 +413,7 @@ def _total_savings_eur(conn: sqlite3.Connection, device_id: int) -> float:
         """, (device_id, von + " 00:00:00", bis + " 23:59:59")).fetchone()
 
         diff_wh = row[0] if row and row[0] is not None else 0.0
-        kwh = max(0.0, diff_wh) / 60000.0
+        kwh = max(0.0, diff_wh) / 1000.0
 
         # Produktions-Offset wird in der ersten (ältesten) Periode hinzugerechnet
         if i == 0:
@@ -446,7 +446,7 @@ def _avg_daily_kwh_30d(conn: sqlite3.Connection, device_id: int) -> float:
     valid = [max(0.0, r["diff_wh"]) for r in rows if r["diff_wh"] is not None]
     if not valid:
         return 0.0
-    return (sum(valid) / len(valid)) / 60000.0
+    return (sum(valid) / len(valid)) / 1000.0
 
 # ---------------------------------------------------------------------------
 # API Endpoints – Status & Charts
@@ -560,7 +560,7 @@ async def get_chart_30days() -> dict:
             rows = conn.execute(
                 """
                 SELECT DATE(ts) AS tag,
-                       (MAX(total_wh) - MIN(total_wh)) / 60000.0 AS kwh
+                       (MAX(total_wh) - MIN(total_wh)) / 1000.0 AS kwh
                 FROM readings
                 WHERE device_id = ?
                   AND DATE(ts) >= ?
