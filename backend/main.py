@@ -202,7 +202,8 @@ async def fetch_shelly_cloud(session: aiohttp.ClientSession, auth_key: str, serv
     # rechnen können — unabhängig davon, welche Generation das Gerät ist.
     #
     # Gen1 (z.B. Shelly Plug S, "meters"):
-    #   total liefert Watt-Minuten (Wmin), NICHT Wh → × 60 zur Normalisierung.
+    #   total liefert Watt-Minuten (Wmin), NICHT Wh → / 60 zur Normalisierung
+    #   (1 Wh = 60 Wmin).
     # Gen2 EM ("emeters") / Gen2 Pro ("switch:0"):
     #   total / aenergy.total liefern bereits Wh → keine Umrechnung nötig.
     meters = device_status.get("meters", [])
@@ -214,7 +215,7 @@ async def fetch_shelly_cloud(session: aiohttp.ClientSession, auth_key: str, serv
         total_wh = float(emeters[0].get("total", 0))
     elif meters:  # Gen1 — Watt-Minuten, auf Wh normalisieren
         power_w = float(meters[0].get("power", 0))
-        total_wh = float(meters[0].get("total", 0)) * 60.0
+        total_wh = float(meters[0].get("total", 0)) / 60.0
     elif switch0:  # Shelly Pro (switch:0) — bereits Wh, apower negativ = Einspeisung
         power_w = abs(float(switch0.get("apower", 0)))
         total_wh = float(switch0.get("aenergy", {}).get("total", 0))
